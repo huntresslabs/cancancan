@@ -17,14 +17,22 @@ module CanCan
       #   query(:manage, User).conditions # => "not (self_managed = 't') AND ((manager_id = 1) OR (id = 1))"
       #
       def conditions
-        if @rules.size == 1 && @rules.first.base_behavior
+        conditions_for_rules(@rules)
+      end
+
+      def conditions_for_rules(rules)
+        if rules.size == 1 && rules.first.base_behavior
           # Return the conditions directly if there's just one definition
-          tableized_conditions(@rules.first.conditions).dup
+          tableized_conditions(rules.first.conditions).dup
         else
-          @rules.reverse.inject(false_sql) do |sql, rule|
+          rules.reverse.inject(false_sql) do |sql, rule|
             merge_conditions(sql, tableized_conditions(rule.conditions).dup, rule.base_behavior)
           end
         end
+      end
+
+      def conditions_for_rule(rule)
+        conditions_for_rules([rule])
       end
 
       def tableized_conditions(conditions, model_class = @model_class)
@@ -53,8 +61,16 @@ module CanCan
       # Returns the associations used in conditions for the :joins option of a search.
       # See ModelAdditions#accessible_by
       def joins
+        joins_for_rules(@rules)
+      end
+
+      def joins_for_rule(rule)
+        joins_for_rules([rule])
+      end
+
+      def joins_for_rules(rules)
         joins_hash = {}
-        @rules.each do |rule|
+        rules.each do |rule|
           merge_joins(joins_hash, rule.associations_hash)
         end
         clean_joins(joins_hash) unless joins_hash.empty?
@@ -65,7 +81,7 @@ module CanCan
           @model_class.where(nil).merge(override_scope)
         elsif @model_class.respond_to?(:where) && @model_class.respond_to?(:joins)
           if mergeable_conditions?
-            build_relation(conditions)
+            build_relation_with_unions(@model_class, @rules)
           else
             build_relation(*(@rules.map(&:conditions)))
           end
@@ -90,6 +106,39 @@ module CanCan
             raise Error, "Unable to merge an Active Record scope with other conditions. Instead use a hash or SQL for #{rule.actions.first} #{rule.subjects.first} ability."
           end
         end
+      end
+
+      def build_relation_with_unions(model_class,rules)
+        relations = rules.map do |rule|
+          model_class.where(conditions_for_rule(rule)).joins(joins_for_rule(rule))
+        end
+        if relations.length==1
+          relations.first
+        else
+          # Capture the bind values from each of the relations
+          binds = relations.first.bind_values
+
+          union_query = relations.inject do |result, element|
+            binds += element.bind_values
+            result.union(element)
+          end
+
+          # Build a table alias using the name of the model so additional
+          # conditions can be added to the query
+          table_alias = model_class.arel_table.create_table_alias(union_query,
+            model_class.table_name)
+
+          # Build a from subquery and apply the bind values from each of the
+          # relations
+          rel = model_class.from(table_alias)
+          rel.bind_values += binds
+          rel
+        end
+      end
+
+      # used with inject to return emtpy relation instead of a nil value
+      def empty_relation(model_class)
+        model_class.where("1=1")
       end
 
       def merge_conditions(sql, conditions_hash, behavior)
