@@ -112,7 +112,9 @@ module CanCan
         relations = rules.map do |rule|
           model_class.where(conditions_for_rule(rule)).joins(joins_for_rule(rule))
         end
-        if relations.length==1
+        if relations.empty?
+          model_class.where('1 = 0')
+        elsif relations.length==1
           relations.first
         else
           # Capture the bind values from each of the relations
@@ -120,7 +122,7 @@ module CanCan
 
           union_query = relations.inject do |result, element|
             binds += element.bind_values
-            result.union(element)
+            Arel::Nodes::Union.new(result.respond_to?(:ast) ? result.ast : result, element.ast)
           end
 
           # Build a table alias using the name of the model so additional
@@ -131,14 +133,9 @@ module CanCan
           # Build a from subquery and apply the bind values from each of the
           # relations
           rel = model_class.from(table_alias)
-          rel.bind_values += binds
+          rel.bind_values = binds
           rel
         end
-      end
-
-      # used with inject to return emtpy relation instead of a nil value
-      def empty_relation(model_class)
-        model_class.where("1=1")
       end
 
       def merge_conditions(sql, conditions_hash, behavior)
