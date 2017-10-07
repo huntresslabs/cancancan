@@ -133,7 +133,7 @@ module CanCan
           # Build a from subquery and apply the bind values from each of the
           # relations
           rel = model_class.from(table_alias)
-          rel.bind_values = binds
+          rel.bind_values += binds
           rel
         end
       end
