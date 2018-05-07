@@ -15,4 +15,4 @@ platforms :ruby, :mswin, :mingw do
   gem "sqlite3"
 end
 
-gemspec :path => "../"
+gemspec path: "../"

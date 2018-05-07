@@ -16,4 +16,4 @@ platforms :ruby, :mswin, :mingw do
   gem "pg"
 end
 
-gemspec :path => "../"
+gemspec path: "../"
