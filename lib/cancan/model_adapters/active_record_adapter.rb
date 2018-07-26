@@ -108,32 +108,54 @@ module CanCan
         end
       end
 
+      class UnionFromClause < ActiveRecord::Relation::FromClause
+        def initialize(value, name, bound_attributes)
+          super(value, name)
+          @bound_attributes = bound_attributes
+        end
+
+        def binds
+          @bound_attributes
+        end
+      end
+
       def build_relation_with_unions(model_class,rules)
         relations = rules.map do |rule|
           model_class.where(conditions_for_rule(rule)).joins(joins_for_rule(rule))
         end
         if relations.empty?
-          model_class.where('1 = 0')
+          model_class.none
         elsif relations.length==1
           relations.first
         else
-          # Capture the bind values from each of the relations
-          binds = relations.first.bind_values
+          # Grab the first relation and it's binds
+          first = relations.shift
+          binds = first.bound_attributes
 
-          union_query = relations.inject do |result, element|
-            binds += element.bind_values
-            Arel::Nodes::Union.new(result.respond_to?(:ast) ? result.ast : result, element.ast)
+          # Union together the remaining relations with the first
+          union_query = relations.inject(first.arel.ast) do |result, relation|
+            binds += relation.bound_attributes
+            Arel::Nodes::Union.new(result, relation.ast)
           end
 
-          # Build a table alias using the name of the model so additional
-          # conditions can be added to the query
+          # Give the table the same alias as the model table so associations
+          # work as if there were no unions
           table_alias = model_class.arel_table.create_table_alias(union_query,
             model_class.table_name)
 
-          # Build a from subquery and apply the bind values from each of the
-          # relations
-          rel = model_class.from(table_alias)
-          rel.bind_values = binds + rel.bind_values
+          # Since Rails 5.2, binds are maintained only in the Arel AST
+          if ActiveRecord.gem_version >= Gem::Version.new('5.2.0.beta2')
+            rel = model_class.unscoped.from(table_alias)
+          # In Rails >= 5.0, < 5.2, binds are maintained only in ActiveRecord
+          elsif ActiveRecord::VERSION::MAJOR >= 5
+            rel = model_class.unscoped.spawn
+            rel.from_clause = UnionFromClause.new(table_alias, nil, binds)
+          # Rails < 5.0 maintained binds in ActiveRecord but under the
+          # bind_values method. We don't support this anymore
+          else
+            raise "ActiveRecord #{ActiveRecord.gem_version} not supported"
+          end
+
           rel
         end
       end
